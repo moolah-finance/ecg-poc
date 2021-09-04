@@ -26,16 +26,48 @@ Release note
     6. Make the code full parametric with default values
     7. Comment not needed functions such as: clean_epochs, create_best_signal_by_selection
     8. Bug fix in create_best_signal_by_removal (when removing no-quality epochs)
+4 Sep 2021 by MK
+    1. Add features from NK: HRV_VLF, HRV_LFn, HRV_HFn, HRV_LFHF, HRV_HTI
+    2. Create new features Min_HR, Max_HR
+    3. Reorder feature accoding to NK features
+    4. Group features to Time-Domain, Frequency-Domain, Nonlinear, Other
+    5. Add Meta data: Version and date, User, filename, sampling-rate, epoch-size, data-lengh, start-time, end-time, duration-of-analysis
+    6. Bug fix in function moolah_calc_hrv inorder if only exist one excellent epoch, then it can be usable len(ecg_best) >= (sampling_rate * epoch_size)
 """
 
 # Load the NeuroKit package and other useful packages
 import neurokit2 as nk
+from neurokit2.hrv.hrv_utils import _hrv_get_rri, _hrv_sanitize_input
 import pandas as pd
 import numpy as np
 import sys
+import getpass
+import time
 
-selected_features = ["HRV_SI", "HRV_SDNN", "HRV_MeanNN", "HRV_RMSSD", "HRV_LF", "HRV_HF", "HRV_SD1", "HRV_SD2", "HRV_MeanHR", "HRV_SNS", "HRV_PNS"]
 
+version = "Moolah-Neurokit2-HRV-Ananlysis 1.0 - 4 Sep 20121"
+selected_features = ["*** Time Domain Features", "HRV_RMSSD", "HRV_MeanNN", "HRV_SDNN", "HRV_HTI",
+                    "*** Frequency Domain Features", "HRV_VLF", "HRV_LF", "HRV_HF", "HRV_LFHF", "HRV_LFn", "HRV_HFn",
+                    "*** Nonlinear Featues", "HRV_SD1", "HRV_SD2", "HRV_SD1SD2", "HRV_SI"]
+
+
+# find min and max HR from rri
+def find_min_max_HR(rri):
+    beats = 0
+    beats_list = np.array([], dtype=np.int8)
+    time_len = 0.0
+    for rr in rri:
+        if time_len+rr > 60000.0:
+            beats_list = np.append(beats_list,[beats])
+            # print("---time len is ", time_len, "---next rr is ", rr, "---beats is ", beats)
+            beats = 1
+            time_len = rr
+        else:
+            beats += 1
+            time_len += rr
+    min_hr = np.min(beats_list)
+    max_hr = np.max(beats_list)
+    return min_hr, max_hr
 
 # Calculate hrv metrics for ECG signal
 def calc_hrv(data, sampling_rate=1000):
@@ -49,9 +81,20 @@ def calc_hrv(data, sampling_rate=1000):
         if feature in hrv_indices.columns:
             feature_value = hrv_indices.loc[:, feature][0]
             selected_indices = selected_indices.append({'feature':feature, 'value':feature_value}, ignore_index=True)
+        else:
+            selected_indices = selected_indices.append({'feature':"", 'value':""}, ignore_index=True)
+            selected_indices = selected_indices.append({'feature':feature, 'value':"Neurokit2"}, ignore_index=True)
+    
+    # Add other features
+    selected_indices = selected_indices.append({'feature':"", 'value':""}, ignore_index=True)
+    selected_indices = selected_indices.append({'feature': "*** Other Features", 'value':"Moolah"}, ignore_index=True)
     selected_indices = selected_indices.append({'feature':'MeanHR', 'value': 60000/hrv_indices.loc[:, "HRV_MeanNN"][0]}, ignore_index=True)
-    selected_indices = selected_indices.append({'feature':'HRV_SNS', 'value':'NA'}, ignore_index=True)
-    selected_indices = selected_indices.append({'feature':'HRV_PNS', 'value':'NA'}, ignore_index=True)
+    # extract rri then min, max of HR
+    peaks_s = _hrv_sanitize_input(peaks)
+    rri = _hrv_get_rri(peaks_s, sampling_rate=sampling_rate, interpolate=False)
+    min_HR, max_HR = find_min_max_HR(rri)
+    selected_indices = selected_indices.append({'feature':'MinHR', 'value': min_HR}, ignore_index=True)
+    selected_indices = selected_indices.append({'feature':'MaxHR', 'value': max_HR}, ignore_index=True)
         
     print(selected_indices)
     return selected_indices
@@ -64,7 +107,7 @@ def moolah_calc_hrv(ecg_signal, sampling_rate=1000, epoch_size=30):
     quality = assess_quality(epochs, sampling_rate)
     ecg_best = create_best_signal_by_removal(epochs, quality, sampling_rate)
     moolah_hrv = pd.DataFrame()
-    if len(ecg_best) > (sampling_rate * epoch_size):
+    if len(ecg_best) >= (sampling_rate * epoch_size):
         moolah_hrv = calc_hrv(ecg_best, sampling_rate)
     return moolah_hrv
 
@@ -169,15 +212,33 @@ def nkhrv(input_signal_file, sampling_rate=1000, epoch_size=30):
     dat = pd.read_csv(input_signal_file)
     print(dat.head())  # Print first 5 rows
     ecg_signal = dat.iloc[:,0]
+    uname = getpass.getuser()
 
     # Calculate hrv metrics on ECG signal compound using moolah method
+    start = time.time()
     df_hrv_moolah = moolah_calc_hrv(ecg_signal, sampling_rate=sampling_rate, epoch_size=epoch_size)
-    if len(df_hrv_moolah) > 0:
-        out_file = "hrv_" + input_signal_file
-        df_hrv_moolah.to_csv(out_file, header=False, index=False)
+    end = time.time()
+
+    # Add meta data
+    df_meta = pd.DataFrame(columns=['feature', 'value'])
+    df_meta = df_meta.append({'feature':"Version", 'value': version}, ignore_index=True)
+    df_meta = df_meta.append({'feature':"User", 'value': uname}, ignore_index=True)
+    df_meta = df_meta.append({'feature':"file name", 'value': input_signal_file}, ignore_index=True)
+    df_meta = df_meta.append({'feature':"Sampling Rate", 'value': sampling_rate}, ignore_index=True)
+    df_meta = df_meta.append({'feature':"Epoch Size (s)", 'value': epoch_size}, ignore_index=True)
+    df_meta = df_meta.append({'feature':"Sample size", 'value': len(ecg_signal)}, ignore_index=True)
+    df_meta = df_meta.append({'feature':"Start time", 'value': time.ctime(start)}, ignore_index=True)
+    df_meta = df_meta.append({'feature':"end time", 'value': time.ctime(end)}, ignore_index=True)
+    df_meta = df_meta.append({'feature':"Duration (s)", 'value': end-start}, ignore_index=True)
+    df_meta = df_meta.append({'feature':"", 'value': ""}, ignore_index=True)
+    df_hrv_moolah = df_meta.append(df_hrv_moolah)
+
+    out_file = "hrv_" + input_signal_file
+    df_hrv_moolah.to_csv(out_file, header=False, index=False)
+
 
 # for test
-# nkhrv("ecg_compound.csv", 1000, 40)
+# nkhrv("ecg_compound_3min_1000hz_hr60.csv", 1000, 40)
 
 # """
 if __name__=="__main__":
