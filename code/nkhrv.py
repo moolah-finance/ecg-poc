@@ -33,6 +33,8 @@ Release note
     4. Group features to Time-Domain, Frequency-Domain, Nonlinear, Other
     5. Add Meta data: Version and date, User, filename, sampling-rate, epoch-size, data-lengh, start-time, end-time, duration-of-analysis
     6. Bug fix in function moolah_calc_hrv inorder if only exist one excellent epoch, then it can be usable len(ecg_best) >= (sampling_rate * epoch_size)
+5 Sep 2021 by MK
+    1. Bug fix in find_min_max_HR when the sum(rri) is less than 1 minute
 """
 
 # Load the NeuroKit package and other useful packages
@@ -53,13 +55,19 @@ selected_features = ["*** Time Domain Features", "HRV_RMSSD", "HRV_MeanNN", "HRV
 
 # find min and max HR from rri
 def find_min_max_HR(rri):
+    # if sum(rri) < 60000 (1 minute)
+    s = sum(rri)
+    if s < 60000:
+        min_hr = max_hr = 60000 * len(rri) / s
+        return min_hr, max_hr
+    # if sum(rri) >= 60000 (1 minute)
     beats = 0
     beats_list = np.array([], dtype=np.int8)
     time_len = 0.0
     for rr in rri:
-        if time_len+rr > 60000.0:
+        if time_len+rr >= 60000.0:
             beats_list = np.append(beats_list,[beats])
-            # print("---time len is ", time_len, "---next rr is ", rr, "---beats is ", beats)
+            print("---time len is ", time_len, "---next rr is ", rr, "---beats is ", beats)
             beats = 1
             time_len = rr
         else:
@@ -238,9 +246,9 @@ def nkhrv(input_signal_file, sampling_rate=1000, epoch_size=30):
 
 
 # for test
-# nkhrv("ecg_compound_3min_1000hz_hr60.csv", 1000, 40)
+nkhrv("ecg_compound_3min_1000hz_hr60.csv", 1000, 40)
 
-# """
+"""
 if __name__=="__main__":
     if len(sys.argv) < 2:
         print("Usage: nkhrv ecg_file sampling_rate=1000 epoch_size=30")
@@ -251,5 +259,5 @@ if __name__=="__main__":
         nkhrv(sys.argv[1], int(sys.argv[2]))
     else:
         nkhrv(sys.argv[1], int(sys.argv[2]), int(sys.argv[3]))
-# """
+"""
 
